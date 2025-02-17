@@ -90,9 +90,6 @@ message(0x7364d09c) CollectDevFee {
 message(0x7365d09c) HireMiners {
 }
 
-message(0x7366d09c) WithdrawAllBalance {
-}
-
 contract GemMiner with OwnableTransferable, Deployable {
     owner: Address;
     lastBlockTime: Int;
@@ -920,25 +917,6 @@ contract GemMiner with OwnableTransferable, Deployable {
         send(SendParameters{
             to: self.owner,
             value: amount,
-            mode: SEND_MODE_REGULAR
-        });
-    }
-
-    receive(msg: WithdrawAllBalance) {
-        // Ensure only the owner can call this
-        require(sender() == self.owner, "Only owner can withdraw balance");
-        
-        // Get the current contract balance
-        let contractBalance: Int = myBalance();
-        
-        // Leave a small reserve for gas (0.1 TON)
-        let amountToSend: Int = contractBalance - 100000000;
-        require(amountToSend > 0, "Insufficient balance");
-
-        // Send the balance to the owner
-        send(SendParameters{
-            to: self.owner,
-            value: amountToSend,
             mode: SEND_MODE_REGULAR
         });
     }
