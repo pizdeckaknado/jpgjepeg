@@ -4,7 +4,7 @@ import "@stdlib/ownable";
 // Constants
 const ONE_TON: Int = 1000000000;  // 1 TON in nanotons
 const MIN_INVEST: Int = ONE_TON;
-const MIN_ACTION_INTERVAL: Int = 0; // 3 hours in seconds
+const MIN_ACTION_INTERVAL: Int = 10800; // 3 hours in seconds
 const INIT_MARKET_EGGS: Int = 108000000000;
 
 // Referral system constants
@@ -19,7 +19,7 @@ const SEND_MODE_IGNORE_ERRORS: Int = 1; // Ignore errors mode
 
 const PSN: Int = 10000;
 const PSNH: Int = 5000;
-const EGGS_TO_HATCH_1MINERS: Int = 1080000;  // value
+const EGGS_TO_HATCH_1MINERS: Int = 1080000;  // Corrected value from Solidity
 const FEE_PERCENT: Int = 8;
 
 // Health reduction constants
@@ -823,7 +823,7 @@ contract GemMiner with OwnableTransferable, Deployable {
         let newMiners = self.safeDiv(eggsUsed, EGGS_TO_HATCH_1MINERS);
         require(newMiners > 0, "Not enough eggs for new miners");
         
-        // Update market eggs 
+        // Update market eggs (only 20% like in BakedPizza)
         self.marketEggs = self.safeAdd(self.marketEggs, self.safeDiv(eggsUsed, 5));
         
         // Process referral rewards using TON equivalent
@@ -837,6 +837,9 @@ contract GemMiner with OwnableTransferable, Deployable {
         
         // Add new miners to total
         stats.totalMiners = self.safeAdd(stats.totalMiners, newMiners);
+        
+        // Increment upgrade count
+        stats.upgradeCount = stats.upgradeCount + 1;
         
         // Save updated stats
         self.playerStats.set(sender, stats);
