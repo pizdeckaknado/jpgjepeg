@@ -71,55 +71,7 @@ struct PlayerMainStats {
     contractBalance: Int;  // Contract balance in nanotons
     marketEggs: Int;
     registrationTime: Int;
-}
-
-message MinerEvent {
-    player: Address;
-    newMiners: Int;
-    eggsUsed: Int;
-    timestamp: Int;
-}
-
-message ReferralRewardEvent {
-    referrer: Address;
-    player: Address;
-    amount: Int;
-    level: Int;
-    timestamp: Int;
-}
-
-message ReferralAssignedEvent {
-    player: Address;
-    referrer: Address;
-    level2Referrer: Address;
-    level3Referrer: Address;
-    timestamp: Int;
-}
-
-message HealthReductionEvent {
-    player: Address;
-    depositId: Int;
-    oldHealth: Int;
-    newHealth: Int;
-    timestamp: Int;
-}
-
-message WithdrawEvent {
-    player: Address;
-    amount: Int;
-    minersReduced: Int;
-    timestamp: Int;
-}
-
-message DebugEvent {
-    player: Address;
-    eggsUsed: Int;
-    eggValue: Int;
-    withdrawAmount: Int;
-    devFee: Int;
-    totalMiners: Int;
-    secondsPassed: Int;
-    timestamp: Int;
+    totalDeposit: Int;
 }
 
 message(0x7361d09c) BuyMiners {
@@ -324,7 +276,8 @@ contract GemMiner with OwnableTransferable, Deployable {
             referralCount: referralCount,
             contractBalance: self.balance,
             marketEggs: self.marketEggs,
-            registrationTime: stats.registrationTime
+            registrationTime: stats.registrationTime,
+            totalDeposit: stats.totalDeposit
         };
     }
 
@@ -339,11 +292,23 @@ contract GemMiner with OwnableTransferable, Deployable {
         
         // Get player and referrer IDs
         let playerId = self.getOrCreateUserId(player.address);
-        let referrerId = self.getOrCreateUserId(referrer);
         
-        // If the referrer is the same as the player or a zero address - use the admin
-        let actualReferrer = (playerId == referrerId || referrer == newAddress(0, 0)) ? self.owner : referrer;
-        let actualReferrerId = (playerId == referrerId || referrer == newAddress(0, 0)) ? 1 : referrerId;
+        // Try to get referrer ID, if fails - use admin
+        let referrerId: Int = 1; // Default to admin's ID
+        let actualReferrer: Address = self.owner; // Default to admin
+        
+        // Validate referrer
+        if (referrer != newAddress(0, 0)) {
+            // Check if referrer exists in the system
+            let refId = self.addressToId.get(referrer);
+            if (refId != null && 
+                refId!! > 0 && 
+                refId!! <= self.lastUserId && 
+                referrer != player.address) {
+                referrerId = refId!!;
+                actualReferrer = referrer;
+            }
+        }
         
         // Set first-level referrer
         playerStats.referrer = MaybeAddress{
@@ -356,181 +321,115 @@ contract GemMiner with OwnableTransferable, Deployable {
         referrerStats.referralCount = referrerStats.referralCount + 1;
         self.playerStats.set(actualReferrer, referrerStats);
         
-        // Set second-level referrer if available
-        if (referrerStats.referrer.isSet && referrerStats.referrer.value != newAddress(0, 0)) {
-            let level2ReferrerAddress = referrerStats.referrer.value;
-            playerStats.level2Referrer = MaybeAddress{
-                isSet: true,
-                value: level2ReferrerAddress
-            };
-            
-            // Get second-level referrer's stats
-            let level2Stats = self.getOrCreatePlayerStats(level2ReferrerAddress);
-            
-            // Set third-level referrer if available
-            if (level2Stats.referrer.isSet && level2Stats.referrer.value != newAddress(0, 0)) {
-                let level3ReferrerAddress = level2Stats.referrer.value;
-                playerStats.level3Referrer = MaybeAddress{
+        // Try to set second-level referrer
+        if (referrerStats.referrer.isSet) {
+            let level2RefAddr = referrerStats.referrer.value;
+            // Validate level 2 referrer
+            if (level2RefAddr != newAddress(0, 0) && 
+                level2RefAddr != self.owner && 
+                self.addressToId.get(level2RefAddr) != null) {
+                playerStats.level2Referrer = MaybeAddress{
                     isSet: true,
-                    value: level3ReferrerAddress
+                    value: level2RefAddr
                 };
+                
+                // Try to set third-level referrer
+                let level2Stats = self.getOrCreatePlayerStats(level2RefAddr);
+                if (level2Stats.referrer.isSet) {
+                    let level3RefAddr = level2Stats.referrer.value;
+                    // Validate level 3 referrer
+                    if (level3RefAddr != newAddress(0, 0) && 
+                        level3RefAddr != self.owner && 
+                        self.addressToId.get(level3RefAddr) != null) {
+                        playerStats.level3Referrer = MaybeAddress{
+                            isSet: true,
+                            value: level3RefAddr
+                        };
+                    }
+                }
             }
         }
         
         self.playerStats.set(player.address, playerStats);
+    }
+
+    // Unified referral reward distribution function
+    fun distributeReferralReward(playerStats: UpdatePlayer, totalRefReward: Int) {
+        // Calculate rewards for each level
+        let l1p = self.safeMul(totalRefReward, LEVEL1_PERCENT) / 100; 
+        let l2p = self.safeMul(totalRefReward, LEVEL2_PERCENT) / 100;
+        let l3p = self.safeMul(totalRefReward, LEVEL3_PERCENT) / 100;
         
-        // Emit referral assigned event
-        emit(ReferralAssignedEvent{
-            player: player.address,
-            referrer: actualReferrer,
-            level2Referrer: playerStats.level2Referrer.value,
-            level3Referrer: playerStats.level3Referrer.value,
-            timestamp: now()
-        }.toCell());
+        // Initially assume all leftover is added to first level
+        let level1Reward = l1p;
+        let level2Reward = 0;
+        let level3Reward = 0;
+
+        // Check second level existence
+        if (playerStats.level2Referrer.isSet && playerStats.level2Referrer.value != newAddress(0, 0)) {
+            level2Reward = l2p; 
+        } else {
+            // No level 2? Add its share to level 1
+            level1Reward = self.safeAdd(level1Reward, l2p);
+        }
+
+        // Check third level existence
+        if (playerStats.level3Referrer.isSet && playerStats.level3Referrer.value != newAddress(0, 0)) {
+            level3Reward = l3p;
+        } else {
+            // No level 3? Add its share to level 1
+            level1Reward = self.safeAdd(level1Reward, l3p);
+        }
+
+        // Distribute rewards to each level
+
+        // Level 1 (should always exist, even if it's admin)
+        let level1RefAddr = playerStats.referrer.value; 
+        if (level1RefAddr != newAddress(0, 0)) {
+            let ref1Stats = self.getPlayerStatsOrFail(level1RefAddr);
+            ref1Stats.referralRewards = self.safeAdd(ref1Stats.referralRewards, level1Reward);
+            self.playerStats.set(level1RefAddr, ref1Stats);
+        }
+
+        // Level 2
+        if (level2Reward > 0) {
+            let level2RefAddr = playerStats.level2Referrer.value;
+            let ref2Stats = self.getPlayerStatsOrFail(level2RefAddr);
+            ref2Stats.referralRewards = self.safeAdd(ref2Stats.referralRewards, level2Reward);
+            self.playerStats.set(level2RefAddr, ref2Stats);
+        }
+
+        // Level 3
+        if (level3Reward > 0) {
+            let level3RefAddr = playerStats.level3Referrer.value;
+            let ref3Stats = self.getPlayerStatsOrFail(level3RefAddr);
+            ref3Stats.referralRewards = self.safeAdd(ref3Stats.referralRewards, level3Reward);
+            self.playerStats.set(level3RefAddr, ref3Stats);
+        }
     }
 
     fun distributeReferralRewards(player: Player, amount: Int) {
         // Calculate the total referral reward
         let totalRefReward = self.safeMul(amount, REFERRAL_PERCENT) / 100;
         
-        // Get player's stats
-        let playerStats = self.getPlayerStatsOrFail(player.address);
-        
         // Subtract the entire referral reward from the contract balance immediately
         self.balance = self.safeSub(self.balance, totalRefReward);
         
-        // First-level referrer always exists (either the specified referrer or the admin)
-        let level1Referrer = self.getPlayerOrFail(playerStats.referrer.value);
-        let level1Stats = self.getPlayerStatsOrFail(level1Referrer.address);
-        
-        // Start with the base reward for first-level
-        let level1Reward = self.safeMul(totalRefReward, LEVEL1_PERCENT) / 100;
-        
-        // If there is no second-level referrer, add that share to the first-level
-        if (!playerStats.level2Referrer.isSet) {
-            let level2Reward = self.safeMul(totalRefReward, LEVEL2_PERCENT) / 100;
-            level1Reward = self.safeAdd(level1Reward, level2Reward);
-        } else {
-            let level2Referrer = self.getPlayerOrFail(playerStats.level2Referrer.value);
-            let level2Stats = self.getPlayerStatsOrFail(level2Referrer.address);
-            let level2Reward = self.safeMul(totalRefReward, LEVEL2_PERCENT) / 100;
-            
-            level2Stats.referralRewards = self.safeAdd(level2Stats.referralRewards, level2Reward);
-            self.playerStats.set(level2Referrer.address, level2Stats);
-            
-            emit(ReferralRewardEvent{
-                referrer: level2Referrer.address,
-                player: context().sender,
-                amount: level2Reward,
-                level: 2,
-                timestamp: now()
-            }.toCell());
-        }
-        
-        // If there is no third-level referrer, add that share to the first-level
-        if (!playerStats.level3Referrer.isSet) {
-            let level3Reward = self.safeMul(totalRefReward, LEVEL3_PERCENT) / 100;
-            level1Reward = self.safeAdd(level1Reward, level3Reward);
-        } else {
-            let level3Referrer = self.getPlayerOrFail(playerStats.level3Referrer.value);
-            let level3Stats = self.getPlayerStatsOrFail(level3Referrer.address);
-            let level3Reward = self.safeMul(totalRefReward, LEVEL3_PERCENT) / 100;
-            
-            level3Stats.referralRewards = self.safeAdd(level3Stats.referralRewards, level3Reward);
-            self.playerStats.set(level3Referrer.address, level3Stats);
-            
-            emit(ReferralRewardEvent{
-                referrer: level3Referrer.address,
-                player: context().sender,
-                amount: level3Reward,
-                level: 3,
-                timestamp: now()
-            }.toCell());
-        }
-        
-        // Distribute the final reward to the first-level (base + undistributed)
-        level1Stats.referralRewards = self.safeAdd(level1Stats.referralRewards, level1Reward);
-        self.playerStats.set(level1Referrer.address, level1Stats);
-        
-        emit(ReferralRewardEvent{
-            referrer: level1Referrer.address,
-            player: context().sender,
-            amount: level1Reward,
-            level: 1,
-            timestamp: now()
-        }.toCell());
+        // Get player's stats and distribute rewards
+        let playerStats = self.getPlayerStatsOrFail(player.address);
+        self.distributeReferralReward(playerStats, totalRefReward);
     }
 
     fun processReinvestReferralReward(player: Player, amount: Int) {
         // Calculate the total referral reward (5% for reinvest)
         let totalRefReward = self.safeMul(amount, HIRE_REFERRAL_PERCENT) / 100;
         
-        // Get player's stats
-        let playerStats = self.getPlayerStatsOrFail(player.address);
-        
         // Subtract the entire referral reward from the contract balance immediately
         self.balance = self.safeSub(self.balance, totalRefReward);
         
-        // First-level referrer always exists (either the specified referrer or the admin)
-        let level1Referrer = self.getPlayerOrFail(playerStats.referrer.value);
-        let level1Stats = self.getPlayerStatsOrFail(level1Referrer.address);
-        
-        // Start with the base reward for first-level
-        let level1Reward = self.safeMul(totalRefReward, LEVEL1_PERCENT) / 100;
-        
-        // If there is no second-level referrer, add that share to the first-level
-        if (!playerStats.level2Referrer.isSet) {
-            let level2Reward = self.safeMul(totalRefReward, LEVEL2_PERCENT) / 100;
-            level1Reward = self.safeAdd(level1Reward, level2Reward);
-        } else {
-            let level2Referrer = self.getPlayerOrFail(playerStats.level2Referrer.value);
-            let level2Stats = self.getPlayerStatsOrFail(level2Referrer.address);
-            let level2Reward = self.safeMul(totalRefReward, LEVEL2_PERCENT) / 100;
-            
-            level2Stats.referralRewards = self.safeAdd(level2Stats.referralRewards, level2Reward);
-            self.playerStats.set(level2Referrer.address, level2Stats);
-            
-            emit(ReferralRewardEvent{
-                referrer: level2Referrer.address,
-                player: context().sender,
-                amount: level2Reward,
-                level: 2,
-                timestamp: now()
-            }.toCell());
-        }
-        
-        // If there is no third-level referrer, add that share to the first-level
-        if (!playerStats.level3Referrer.isSet) {
-            let level3Reward = self.safeMul(totalRefReward, LEVEL3_PERCENT) / 100;
-            level1Reward = self.safeAdd(level1Reward, level3Reward);
-        } else {
-            let level3Referrer = self.getPlayerOrFail(playerStats.level3Referrer.value);
-            let level3Stats = self.getPlayerStatsOrFail(level3Referrer.address);
-            let level3Reward = self.safeMul(totalRefReward, LEVEL3_PERCENT) / 100;
-            
-            level3Stats.referralRewards = self.safeAdd(level3Stats.referralRewards, level3Reward);
-            self.playerStats.set(level3Referrer.address, level3Stats);
-            
-            emit(ReferralRewardEvent{
-                referrer: level3Referrer.address,
-                player: context().sender,
-                amount: level3Reward,
-                level: 3,
-                timestamp: now()
-            }.toCell());
-        }
-        
-        // Distribute the final reward to the first-level (base + undistributed)
-        level1Stats.referralRewards = self.safeAdd(level1Stats.referralRewards, level1Reward);
-        self.playerStats.set(level1Referrer.address, level1Stats);
-        
-        emit(ReferralRewardEvent{
-            referrer: level1Referrer.address,
-            player: context().sender,
-            amount: level1Reward,
-            level: 1,
-            timestamp: now()
-        }.toCell());
+        // Get player's stats and distribute rewards
+        let playerStats = self.getPlayerStatsOrFail(player.address);
+        self.distributeReferralReward(playerStats, totalRefReward);
     }
 
     // Deposit system functions
@@ -619,15 +518,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                     // Save the updated deposit
                     deposits.set(i, currentDeposit);
                     healthChanged = true;
-                    
-                    // Emit event
-                    emit(HealthReductionEvent{
-                        player: player.address,
-                        depositId: i,
-                        oldHealth: oldHealth,
-                        newHealth: currentDeposit.health,
-                        timestamp: now()
-                    }.toCell());
                 }
                 
                 // Second reduction of miners
@@ -650,15 +540,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                     // Save the updated deposit
                     deposits.set(i, currentDeposit);
                     healthChanged = true;
-                    
-                    // Emit event
-                    emit(HealthReductionEvent{
-                        player: player.address,
-                        depositId: i,
-                        oldHealth: oldHealth,
-                        newHealth: currentDeposit.health,
-                        timestamp: now()
-                    }.toCell());
                 }
             }
             i = i + 1;
@@ -793,14 +674,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                                     
                                     let minersReduction = self.safeSub(oldMiners, deposit.miners);
                                     totalMinersReduction = self.safeAdd(totalMinersReduction, minersReduction);
-                                    
-                                    emit(HealthReductionEvent{
-                                        player: player.address,
-                                        depositId: i,
-                                        oldHealth: oldHealth,
-                                        newHealth: deposit.health,
-                                        timestamp: now()
-                                    }.toCell());
                                 }
                                 
                                 if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && deposit.health == 1) {
@@ -811,14 +684,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                                     
                                     let minersReduction = self.safeSub(oldMiners, deposit.miners);
                                     totalMinersReduction = self.safeAdd(totalMinersReduction, minersReduction);
-                                    
-                                    emit(HealthReductionEvent{
-                                        player: player.address,
-                                        depositId: i,
-                                        oldHealth: oldHealth,
-                                        newHealth: deposit.health,
-                                        timestamp: now()
-                                    }.toCell());
                                     
                                     canContinue = false; // Deposit "dead", move to next
                                 }
@@ -850,14 +715,6 @@ contract GemMiner with OwnableTransferable, Deployable {
         
         // Check if merging of deposits is needed
         self.mergeDeadDeposits(player);
-        
-        // Emit withdrawal event
-        emit(WithdrawEvent{
-            player: player.address,
-            amount: actualWithdrawn,
-            minersReduced: totalMinersReduction,
-            timestamp: now()
-        }.toCell());
     }
 
     // Core functions
@@ -913,14 +770,14 @@ contract GemMiner with OwnableTransferable, Deployable {
             stats = self.playerStats.get(sender)!!;
         }
         
-        // Distribute referral rewards on every deposit
+        // Distribute referral rewards on every deposit (using investValue instead of value)
         if (stats.referrer.isSet) {
-            self.distributeReferralRewards(player, value);
+            self.distributeReferralRewards(player, investValue);
             stats = self.playerStats.get(sender)!!;
         }
         
-        // Calculate eggs for purchase (using full amount)
-        let eggs = self.calculateEggBuy(value);
+        // Calculate eggs for purchase (using investValue)
+        let eggs = self.calculateEggBuy(investValue);
         require(eggs > 0, "Not enough eggs");
         
         // Convert eggs to miners with rounding up
@@ -930,28 +787,59 @@ contract GemMiner with OwnableTransferable, Deployable {
         );
         require(miners > 0, "Not enough miners");
         
-        // Update marketEggs
-        self.marketEggs = self.safeAdd(self.marketEggs, eggs);
+        // Add eggs to player's claimed eggs instead of market
+        stats.claimedEggs = self.safeAdd(stats.claimedEggs, eggs);
         
-        // Create a new deposit (using full amount)
-        self.processDeposit(player, value, miners);
+        // Create a new deposit (using investValue)
+        self.processDeposit(player, investValue, miners);
         
         // Get final fresh stats
         stats = self.playerStats.get(sender)!!;
         
         // Update player's statistics
-        stats.totalDeposit = self.safeAdd(stats.totalDeposit, value);
+        stats.totalDeposit = self.safeAdd(stats.totalDeposit, investValue);
         
         // Save updated stats
         self.playerStats.set(sender, stats);
+    }
+
+    receive(msg: HireMiners) {
+        let sender = context().sender;
+        let player = self.getPlayerOrFail(sender);
+        let stats = self.getPlayerStatsOrFail(sender);
+        require(self.safeSub(now(), stats.lastHatch) >= MIN_ACTION_INTERVAL, "Action too frequent");
         
-        // Emit event
-        emit(MinerEvent{
-            player: sender,
-            newMiners: miners,
-            eggsUsed: eggs,
-            timestamp: now()
-        }.toCell());
+        // Get eggs to hire
+        let eggsUsed = self.getEggsSinceLastHatch(player);
+        require(eggsUsed > 0, "No eggs to hire");
+        
+        // Add claimed eggs
+        eggsUsed = self.safeAdd(eggsUsed, stats.claimedEggs);
+        
+        // Calculate TON equivalent for referral reward
+        let reinvestValue = self.calculateEggSell(eggsUsed);
+        
+        // Calculate new miners
+        let newMiners = self.safeDiv(eggsUsed, EGGS_TO_HATCH_1MINERS);
+        require(newMiners > 0, "Not enough eggs for new miners");
+        
+        // Update market eggs (only 20% like in BakedPizza)
+        self.marketEggs = self.safeAdd(self.marketEggs, self.safeDiv(eggsUsed, 5));
+        
+        // Process referral rewards using TON equivalent
+        if (stats.referrer.isSet) {
+            self.processReinvestReferralReward(player, reinvestValue);
+        }
+        
+        // Reset claimed eggs and update last hatch
+        stats.claimedEggs = 0;
+        stats.lastHatch = now();
+        
+        // Add new miners to total
+        stats.totalMiners = self.safeAdd(stats.totalMiners, newMiners);
+        
+        // Save updated stats
+        self.playerStats.set(sender, stats);
     }
 
     receive(msg: SellGems) {
@@ -966,134 +854,28 @@ contract GemMiner with OwnableTransferable, Deployable {
         let eggsUsed = self.getEggsSinceLastHatch(player);
         require(eggsUsed > 0, "No eggs to sell");
         
+        // Add claimed eggs
+        eggsUsed = self.safeAdd(eggsUsed, stats.claimedEggs);
+        
         // Calculate egg value
         let amount = self.calculateEggSell(eggsUsed);
-        require(amount > 0, "Amount too small");
+        require(amount > 0, "Nothing to sell");
         
-        // Calculate developer fee
-        let devFee = self.safeDiv(self.safeMul(amount, FEE_PERCENT), 100);
-        let withdrawAmount = self.safeSub(amount, devFee);
+        // Add all sold eggs to market 
+        self.marketEggs = self.safeAdd(self.marketEggs, eggsUsed);
         
-        // Check if contract has enough balance
-        require(withdrawAmount <= self.balance, "Insufficient contract liquidity");
+        // Calculate and process fee
+        let fee = self.safeDiv(self.safeMul(amount, FEE_PERCENT), 100);
+        self.devFeeBalance = self.safeAdd(self.devFeeBalance, fee);
         
-        // Update market eggs with overflow check
-        let marketEggsNew = self.safeDiv(eggsUsed, 5);
-        require(self.marketEggs + marketEggsNew >= self.marketEggs, "Market eggs overflow");
-        self.marketEggs = self.safeAdd(self.marketEggs, marketEggsNew);
+        // Update contract balance
+        self.balance = self.safeSub(self.balance, self.safeSub(amount, fee));
         
-        // Process withdrawal and health reduction
-        self.processWithdrawal(player, withdrawAmount);
-        
-        // Update player's stats
-        stats.claimedEggs = self.safeAdd(stats.claimedEggs, eggsUsed);
-        stats.lastHatch = now();
+        // Save updated stats
         self.playerStats.set(sender, stats);
-        
-        // Update contract balance AFTER all checks
-        self.balance = self.safeSub(self.balance, withdrawAmount);
-        self.devFeeBalance = self.safeAdd(self.devFeeBalance, devFee);
         
         // Send TON to player
-        send(SendParameters{
-            to: sender,
-            value: withdrawAmount,
-            mode: SEND_MODE_IGNORE_ERRORS,
-            bounce: false
-        });
-
-        // Emit event
-        emit(MinerEvent{
-            player: sender,
-            newMiners: 0,
-            eggsUsed: eggsUsed,
-            timestamp: now()
-        }.toCell());
-
-        // Additional debugging logging
-        emit(DebugEvent{
-            player: sender,
-            eggsUsed: eggsUsed,
-            eggValue: amount,
-            withdrawAmount: withdrawAmount,
-            devFee: devFee,
-            totalMiners: stats.totalMiners,
-            secondsPassed: self.safeSub(now(), stats.lastHatch),
-            timestamp: now()
-        }.toCell());
-    }
-
-    receive(msg: HireMiners) {
-        let sender = context().sender;
-        let player = self.getPlayerOrFail(sender);
-        let stats = self.getPlayerStatsOrFail(sender);
-        require(self.safeSub(now(), stats.lastHatch) >= MIN_ACTION_INTERVAL, "Action too frequent");
-
-        // Get accumulated eggs
-        let eggsUsed = self.getEggsSinceLastHatch(player);
-        require(eggsUsed > 0, "No eggs to hire miners");
-
-        // Calculate new miners with rounding up
-        let newMiners = self.safeDiv(
-            self.safeAdd(eggsUsed, EGGS_TO_HATCH_1MINERS - 1), 
-            EGGS_TO_HATCH_1MINERS
-        );
-        require(newMiners > 0, "Not enough eggs to hire miners");
-
-        // Calculate referral rewards
-        let reinvestValue = self.calculateEggSell(eggsUsed);
-        self.processReinvestReferralReward(player, reinvestValue);
-
-        // Update deposits - find the first one with health > 0
-        let i: Int = 0;
-        let foundLiveDeposit: Bool = false;
-        
-        while (i < stats.depositCounter && !foundLiveDeposit) {
-            let depositOpt = player.deposits.get(i);
-            if (depositOpt != null) {
-                let deposit = depositOpt!!;
-                if (deposit.health > 0 && deposit.amount > 0) {
-                    deposit.miners = self.safeAdd(deposit.miners, newMiners);
-                    player.deposits.set(i, deposit);
-                    foundLiveDeposit = true;
-                }
-            }
-            i = i + 1;
-        }
-        
-        // If no active deposit is found, add to the first one (check its existence)
-        if (!foundLiveDeposit) {
-            require(stats.depositCounter > 0, "No deposits found");
-            let depositOpt = player.deposits.get(0);
-            require(depositOpt != null, "Initial deposit not found");
-            let deposit = depositOpt!!;
-            require(deposit.amount > 0, "Invalid initial deposit");
-            
-            deposit.miners = self.safeAdd(deposit.miners, newMiners);
-            player.deposits.set(0, deposit);
-        }
-
-        // Update player's stats
-        stats.totalMiners = self.safeAdd(stats.totalMiners, newMiners);
-        stats.claimedEggs = self.safeAdd(stats.claimedEggs, eggsUsed);
-        stats.upgradeCount = stats.upgradeCount + 1;
-        stats.lastHatch = now();
-        
-        // Save changes
-        self.players.set(sender, player);
-        self.playerStats.set(sender, stats);
-        
-        // Update market eggs
-        let newMarketEggs = self.safeDiv(eggsUsed, 5);
-        self.marketEggs = self.safeAdd(self.marketEggs, newMarketEggs);
-
-        // Emit event
-        emit(MinerEvent{
-            player: sender,
-            newMiners: newMiners,
-            eggsUsed: eggsUsed,
-            timestamp: now()
-        }.toCell());
+        self.withdraw(sender, self.safeSub(amount, fee));
     }
 
     receive(msg: ClaimRewards) {
@@ -1197,4 +979,4 @@ contract GemMiner with OwnableTransferable, Deployable {
     fun calculateEggsForMiners(miners: Int): Int {
         return self.safeMul(miners, EGGS_TO_HATCH_1MINERS);
     }
-}
+} 
