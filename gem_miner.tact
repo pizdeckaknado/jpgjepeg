@@ -19,7 +19,7 @@ const SEND_MODE_IGNORE_ERRORS: Int = 1; // Ignore errors mode
 
 const PSN: Int = 10000;
 const PSNH: Int = 5000;
-const EGGS_TO_HATCH_1MINERS: Int = 1080000;  // Corrected value from Solidity
+const EGGS_TO_HATCH_1MINERS: Int = 1080000;  // value
 const FEE_PERCENT: Int = 8;
 
 // Health reduction constants
