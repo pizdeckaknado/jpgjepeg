@@ -823,7 +823,7 @@ contract GemMiner with OwnableTransferable, Deployable {
         let newMiners = self.safeDiv(eggsUsed, EGGS_TO_HATCH_1MINERS);
         require(newMiners > 0, "Not enough eggs for new miners");
         
-        // Update market eggs (only 20% like in BakedPizza)
+        // Update market eggs 
         self.marketEggs = self.safeAdd(self.marketEggs, self.safeDiv(eggsUsed, 5));
         
         // Process referral rewards using TON equivalent
