@@ -15,7 +15,6 @@ const REFERRAL_PERCENT: Int = 15;      // 15% for buyminers
 const HIRE_REFERRAL_PERCENT: Int = 5;  // 5% for hireminers
 
 const SEND_MODE_REGULAR: Int = 0;      // Regular message mode
-const SEND_MODE_IGNORE_ERRORS: Int = 1; // Ignore errors mode
 
 const PSN: Int = 10000;
 const PSNH: Int = 5000;
@@ -23,8 +22,6 @@ const EGGS_TO_HATCH_1MINERS: Int = 1080000;  // Corrected value from Solidity
 const FEE_PERCENT: Int = 8;
 
 // Health reduction constants
-const MINERS_FIRST_REDUCTION: Int = 90;   // Reduce miners by 90% after the first threshold
-const MINERS_SECOND_REDUCTION: Int = 50;  // Reduce remaining miners by 50% after the second threshold
 const WITHDRAWAL_THRESHOLD: Int = 300;    // 300% of the deposit
 
 // Data structures
@@ -92,7 +89,6 @@ message(0x7365d09c) HireMiners {
 
 contract GemMiner with OwnableTransferable, Deployable {
     owner: Address;
-    lastBlockTime: Int;
     balance: Int;  // Contract balance in nanotons
     marketEggs: Int;
     players: map<Address, Player>;
@@ -104,7 +100,6 @@ contract GemMiner with OwnableTransferable, Deployable {
 
     init() {
         self.owner = sender();
-        self.lastBlockTime = now();
         self.balance = 0;
         self.marketEggs = INIT_MARKET_EGGS;
         self.players = emptyMap();
@@ -250,7 +245,7 @@ contract GemMiner with OwnableTransferable, Deployable {
             referralRewards: 0,
             referralCount: 0,    // Initialize referral counter
             totalDeposit: 0,
-            totalMiners: 0,
+            totalMiners: 0,     // Total number of miners all time
             totalWithdrawn: 0,
             registrationTime: now(),  // Set registration time
             depositCounter: 0
@@ -287,9 +282,6 @@ contract GemMiner with OwnableTransferable, Deployable {
             return; // Skip if referrer already set
         }
         
-        // Get player and referrer IDs
-        let playerId = self.getOrCreateUserId(player.address);
-        
         // Try to get referrer ID, if fails - use admin
         let referrerId: Int = 1; // Default to admin's ID
         let actualReferrer: Address = self.owner; // Default to admin
@@ -324,19 +316,25 @@ contract GemMiner with OwnableTransferable, Deployable {
             // Validate level 2 referrer
             if (level2RefAddr != newAddress(0, 0) && 
                 level2RefAddr != self.owner && 
+                level2RefAddr != player.address &&  // Prevent circular references
+                level2RefAddr != actualReferrer &&  // Prevent circular references
                 self.addressToId.get(level2RefAddr) != null) {
+                
                 playerStats.level2Referrer = MaybeAddress{
                     isSet: true,
                     value: level2RefAddr
                 };
                 
-                // Try to set third-level referrer
+                // Try to set third-level referrer only if level 2 exists
                 let level2Stats = self.getOrCreatePlayerStats(level2RefAddr);
                 if (level2Stats.referrer.isSet) {
                     let level3RefAddr = level2Stats.referrer.value;
                     // Validate level 3 referrer
                     if (level3RefAddr != newAddress(0, 0) && 
                         level3RefAddr != self.owner && 
+                        level3RefAddr != player.address &&  // Prevent circular references
+                        level3RefAddr != actualReferrer &&  // Prevent circular references
+                        level3RefAddr != level2RefAddr &&   // Prevent circular references
                         self.addressToId.get(level3RefAddr) != null) {
                         playerStats.level3Referrer = MaybeAddress{
                             isSet: true,
@@ -496,7 +494,28 @@ contract GemMiner with OwnableTransferable, Deployable {
                 let totalWithdrawn = self.safeDiv(self.safeMul(currentDeposit.withdrawn, 100), currentDeposit.amount);
                 
                 // First reduction of miners
-                if (totalWithdrawn >= WITHDRAWAL_THRESHOLD && currentDeposit.health == 2) {
+                if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && currentDeposit.health == 2) {
+                    let oldMiners = currentDeposit.miners;
+                    let oldHealth = currentDeposit.health;
+                    currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 5), 100); // -95% immediately
+                    currentDeposit.health = 0;
+                    
+                    // Calculate the reduction in miners
+                    let minersReduction = self.safeSub(oldMiners, currentDeposit.miners);
+                    totalMinersReduction = self.safeAdd(totalMinersReduction, minersReduction);
+                    
+                    // Calculate and remove eggs for removed miners
+                    let eggsToRemove = self.calculateEggsForMiners(minersReduction);
+                    if (eggsToRemove > 0 && eggsToRemove <= self.marketEggs) {
+                        self.marketEggs = self.safeSub(self.marketEggs, eggsToRemove);
+                    }
+                    
+                    // Save the updated deposit
+                    deposits.set(i, currentDeposit);
+                    healthChanged = true;
+                }
+                // Normal first reduction
+                else if (totalWithdrawn >= WITHDRAWAL_THRESHOLD && currentDeposit.health == 2) {
                     let oldMiners = currentDeposit.miners;
                     let oldHealth = currentDeposit.health;
                     currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 10), 100); // -90%
@@ -738,9 +757,6 @@ contract GemMiner with OwnableTransferable, Deployable {
         // Add fee to developer fee balance
         self.devFeeBalance = self.safeAdd(self.devFeeBalance, devFee);
         
-        // Create or get user ID
-        let userId = self.getOrCreateUserId(sender);
-        
         // Get referrer address by ID
         let referrerAddress: Address = self.owner; // Default to contract owner
         if (msg.referrerId > 0) {
@@ -787,16 +803,12 @@ contract GemMiner with OwnableTransferable, Deployable {
         // Add eggs to player's claimed eggs instead of market
         stats.claimedEggs = self.safeAdd(stats.claimedEggs, eggs);
         
+      
         // Create a new deposit (using investValue)
         self.processDeposit(player, investValue, miners);
         
-        // Get final fresh stats
-        stats = self.playerStats.get(sender)!!;
-        
         // Update player's statistics
         stats.totalDeposit = self.safeAdd(stats.totalDeposit, investValue);
-        
-        // Save updated stats
         self.playerStats.set(sender, stats);
     }
 
@@ -866,16 +878,25 @@ contract GemMiner with OwnableTransferable, Deployable {
         
         // Calculate and process fee
         let fee = self.safeDiv(self.safeMul(amount, FEE_PERCENT), 100);
+        let withdrawAmount = self.safeSub(amount, fee);
+        
+        // Process withdrawal
+        self.processWithdrawal(player, withdrawAmount);
+        
         self.devFeeBalance = self.safeAdd(self.devFeeBalance, fee);
         
         // Update contract balance
         self.balance = self.safeSub(self.balance, self.safeSub(amount, fee));
         
+        // Reset claimedEggs and update lastHatch
+        stats.claimedEggs = 0;
+        stats.lastHatch = now();
+        
         // Save updated stats
         self.playerStats.set(sender, stats);
         
         // Send TON to player
-        self.withdraw(sender, self.safeSub(amount, fee));
+        self.withdraw(sender, withdrawAmount);
     }
 
     receive(msg: ClaimRewards) {
