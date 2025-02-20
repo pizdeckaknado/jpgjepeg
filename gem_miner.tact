@@ -496,7 +496,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                 // First reduction of miners
                 if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && currentDeposit.health == 2) {
                     let oldMiners = currentDeposit.miners;
-                    let oldHealth = currentDeposit.health;
                     currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 5), 100); // -95% immediately
                     currentDeposit.health = 0;
                     
@@ -517,7 +516,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                 // Normal first reduction
                 else if (totalWithdrawn >= WITHDRAWAL_THRESHOLD && currentDeposit.health == 2) {
                     let oldMiners = currentDeposit.miners;
-                    let oldHealth = currentDeposit.health;
                     currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 10), 100); // -90%
                     currentDeposit.health = 1;
                     
@@ -539,7 +537,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                 // Second reduction of miners
                 if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && currentDeposit.health == 1) {
                     let oldMiners = currentDeposit.miners;
-                    let oldHealth = currentDeposit.health;
                     currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 50), 100); // -50%
                     currentDeposit.health = 0;
                     
@@ -684,7 +681,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                                 
                                 if (totalWithdrawn >= WITHDRAWAL_THRESHOLD && deposit.health == 2) {
                                     let oldMiners = deposit.miners;
-                                    let oldHealth = deposit.health;
                                     deposit.miners = self.safeDiv(self.safeMul(deposit.miners, 10), 100); // -90%
                                     deposit.health = 1;
                                     
@@ -694,7 +690,6 @@ contract GemMiner with OwnableTransferable, Deployable {
                                 
                                 if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && deposit.health == 1) {
                                     let oldMiners = deposit.miners;
-                                    let oldHealth = deposit.health;
                                     deposit.miners = self.safeDiv(self.safeMul(deposit.miners, 50), 100); // -50%
                                     deposit.health = 0;
                                     
