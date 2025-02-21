@@ -487,13 +487,14 @@ contract GemMiner with OwnableTransferable, Deployable {
         let healthChanged: Bool = false;
         let totalMinersReduction: Int = 0;
         
+        // Process only first active deposit
         while (i < stats.depositCounter && !healthChanged) {
             let deposit = deposits.get(i);
-            if (deposit != null && deposit!!.amount > 0) {
+            if (deposit != null && deposit!!.amount > 0 && deposit!!.health > 0) {
                 let currentDeposit = deposit!!;
                 let totalWithdrawn = self.safeDiv(self.safeMul(currentDeposit.withdrawn, 100), currentDeposit.amount);
                 
-                // First reduction of miners
+                // Handle double threshold for health 2 first
                 if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && currentDeposit.health == 2) {
                     let oldMiners = currentDeposit.miners;
                     currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 5), 100); // -95% immediately
@@ -533,9 +534,8 @@ contract GemMiner with OwnableTransferable, Deployable {
                     deposits.set(i, currentDeposit);
                     healthChanged = true;
                 }
-                
-                // Second reduction of miners
-                if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && currentDeposit.health == 1) {
+                // Second reduction if health is 1
+                else if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && currentDeposit.health == 1) {
                     let oldMiners = currentDeposit.miners;
                     currentDeposit.miners = self.safeDiv(self.safeMul(currentDeposit.miners, 50), 100); // -50%
                     currentDeposit.health = 0;
@@ -588,7 +588,7 @@ contract GemMiner with OwnableTransferable, Deployable {
         let found: Bool = false;
         while (i >= 0 && !found) {
             let deposit = deposits.get(i);
-            if (deposit != null && deposit!!.health > 0) {
+            if (deposit != null && deposit!!.amount > 0) {
                 lastActiveIndex = i;
                 found = true;
             }
@@ -600,6 +600,7 @@ contract GemMiner with OwnableTransferable, Deployable {
             let lastActiveDeposit = deposits.get(lastActiveIndex)!!;
             let newDeposits: map<Int, DepositInfo> = emptyMap();
             let newIndex: Int = 0;
+            let lastActiveNewIndex: Int = -1;
             
             // Loop through all deposits
             i = 0;
@@ -610,7 +611,10 @@ contract GemMiner with OwnableTransferable, Deployable {
                         // Transfer miners to the last active deposit
                         lastActiveDeposit.miners = self.safeAdd(lastActiveDeposit.miners, deposit!!.miners);
                     } else {
-                        // Save the deposit
+                        // Save the deposit and track the new index of last active deposit
+                        if (i == lastActiveIndex) {
+                            lastActiveNewIndex = newIndex;
+                        }
                         newDeposits.set(newIndex, deposit!!);
                         newIndex = newIndex + 1;
                     }
@@ -618,8 +622,10 @@ contract GemMiner with OwnableTransferable, Deployable {
                 i = i + 1;
             }
             
-            // Update the last active deposit with the new miner count
-            newDeposits.set(lastActiveIndex, lastActiveDeposit);
+            // Update the last active deposit with the new miner count using its new index
+            if (lastActiveNewIndex >= 0) {
+                newDeposits.set(lastActiveNewIndex, lastActiveDeposit);
+            }
             
             // Update player's data
             player.deposits = newDeposits;
@@ -644,71 +650,30 @@ contract GemMiner with OwnableTransferable, Deployable {
         
         let remaining = amount;
         let i: Int = 0;
-        let totalMinersReduction: Int = 0;
         
+        // Process withdrawal through active deposits until fully withdrawn
         while (i < stats.depositCounter && remaining > 0) {
             let depositValue: DepositInfo? = player.deposits.get(i);
             
             if (depositValue != null) {
                 let deposit = depositValue!!;
-                if (deposit.amount > 0 && deposit.health > 0) {
-                    // Continue withdrawing from the current deposit until limit is reached or remaining becomes 0
-                    let canContinue: Bool = true;
-                    while (remaining > 0 && deposit.health > 0 && canContinue) {
-                        // Determine the current threshold based on health
-                        let currentThreshold: Int = 0;
-                        if (deposit.health == 2) {
-                            currentThreshold = WITHDRAWAL_THRESHOLD; // 300%
-                        } else if (deposit.health == 1) {
-                            currentThreshold = WITHDRAWAL_THRESHOLD * 2; // 600%
-                        }
-                        
-                        let allowedWithdraw = self.safeDiv(self.safeMul(deposit.amount, currentThreshold), 100);
-                        let availableToWithdraw = self.safeSub(allowedWithdraw, deposit.withdrawn);
-                        
-                        if (availableToWithdraw <= 0) {
-                            canContinue = false;
-                        } else {
-                            let maxWithdraw = self.min(remaining, availableToWithdraw);
-                            
-                            if (maxWithdraw > 0) {
-                                // Update withdrawn before calculating new health
-                                deposit.withdrawn = self.safeAdd(deposit.withdrawn, maxWithdraw);
-                                remaining = self.safeSub(remaining, maxWithdraw);
-                                
-                                // Check threshold and reduce miners if needed
-                                let totalWithdrawn = self.safeDiv(self.safeMul(deposit.withdrawn, 100), deposit.amount);
-                                
-                                if (totalWithdrawn >= WITHDRAWAL_THRESHOLD && deposit.health == 2) {
-                                    let oldMiners = deposit.miners;
-                                    deposit.miners = self.safeDiv(self.safeMul(deposit.miners, 10), 100); // -90%
-                                    deposit.health = 1;
-                                    
-                                    let minersReduction = self.safeSub(oldMiners, deposit.miners);
-                                    totalMinersReduction = self.safeAdd(totalMinersReduction, minersReduction);
-                                }
-                                
-                                if (totalWithdrawn >= (WITHDRAWAL_THRESHOLD * 2) && deposit.health == 1) {
-                                    let oldMiners = deposit.miners;
-                                    deposit.miners = self.safeDiv(self.safeMul(deposit.miners, 50), 100); // -50%
-                                    deposit.health = 0;
-                                    
-                                    let minersReduction = self.safeSub(oldMiners, deposit.miners);
-                                    totalMinersReduction = self.safeAdd(totalMinersReduction, minersReduction);
-                                    
-                                    canContinue = false; // Deposit "dead", move to next
-                                }
-                                
-                                // Save updated deposit
-                                player.deposits.set(i, deposit);
-                            } else {
-                                canContinue = false;
-                            }
-                        }
-                    }
+                if (deposit.amount > 0) {  
+                    // Update withdrawn amount for current active deposit
+                    deposit.withdrawn = self.safeAdd(deposit.withdrawn, remaining);
+                    remaining = 0;
+                    
+                    // Save updated deposit
+                    player.deposits.set(i, deposit);
+                    
+                    // Process health reduction which will handle miners reduction and eggs
+                    self.processHealthReduction(player);
+                    
+                    // Get fresh data after health reduction
+                    player = self.getPlayerOrFail(player.address);
+                    stats = self.getPlayerStatsOrFail(player.address);
                 }
             }
-            i = i + 1; // Move to next deposit only if current is fully exhausted or "dead"
+            i = i + 1;
         }
         
         // Update total withdrawn amount
@@ -717,9 +682,6 @@ contract GemMiner with OwnableTransferable, Deployable {
         
         // Update player's statistics
         stats.totalWithdrawn = self.safeAdd(stats.totalWithdrawn, actualWithdrawn);
-        if (totalMinersReduction > 0) {
-            stats.totalMiners = self.safeSub(stats.totalMiners, totalMinersReduction);
-        }
         
         // Save updated statistics
         self.playerStats.set(player.address, stats);
@@ -795,15 +757,19 @@ contract GemMiner with OwnableTransferable, Deployable {
         );
         require(miners > 0, "Not enough miners");
         
-        // Add eggs to player's claimed eggs instead of market
-        stats.claimedEggs = self.safeAdd(stats.claimedEggs, eggs);
-        
-      
-        // Create a new deposit (using investValue)
+        // Create a new deposit first (using investValue)
         self.processDeposit(player, investValue, miners);
         
-        // Update player's statistics
+        // Get fresh stats after deposit processing
+        stats = self.playerStats.get(sender)!!;
+        
+        // Add eggs to player's claimed eggs
+        stats.claimedEggs = self.safeAdd(stats.claimedEggs, eggs);
+        
+        // Update total deposit
         stats.totalDeposit = self.safeAdd(stats.totalDeposit, investValue);
+        
+        // Save all updates
         self.playerStats.set(sender, stats);
     }
 
