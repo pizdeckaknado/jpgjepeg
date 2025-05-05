@@ -43,10 +43,12 @@ contract GemRegistry with Ownable, Deployable {
         require(value >= MIN_INVEST, "Minimum investment not met");
         require(investAmount <= value, "Investment amount exceeds sent value");
         require(investAmount >= MIN_INVEST, "Investment amount too small");
-        require(value - investAmount >= ton("0.1"), "Insufficient gas");
+        let gasamount = value - investAmount;
+        require(gasamount >= ton("0.1"), "Insufficient gas");
         let devFee = (investAmount * FEE_PERCENT) / 100;
         let refReward = (investAmount * REFERRAL_PERCENT) / 100;
         let investValue = investAmount - devFee;
+        
         require(investValue > 0, "Investment too small after fees");
         self.devFeeBalance += devFee;
         self.referralBalance += refReward;
@@ -59,8 +61,8 @@ contract GemRegistry with Ownable, Deployable {
         let eggs = self.calculateEggBuy(investValue);
         send(SendParameters{
             to: playerAddress,
-            value: 0,
-            mode: SendRemainingValue,
+            value: gasamount,
+            mode: SendDefaultMode,
             body: EggBuyResult{
                 amount: investValue,
                 eggs: eggs,
