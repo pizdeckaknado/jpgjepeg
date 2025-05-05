@@ -203,7 +203,7 @@ receive(msg: EggBuyResult) {
             eggs: eggsUsed,
             ownerAddress: self.owner, 
             playerOwner: self.owner  
-        }.toCell(), false);
+        }.toCell(), false, null);
         self.lastHatch = now();
     }
 receive(msg: HireMiners) {
@@ -221,7 +221,7 @@ receive(msg: HireMiners) {
         eggAmount: eggAmount,
         ownerAddress: self.owner,
         referrer: self.referrer
-    }.toCell(), false);
+    }.toCell(), false, null);
     let currentBalance = myBalance();
     let threshold: Int = ton("0.5");
     let reserveAmount: Int = ton("0.2");
@@ -247,7 +247,7 @@ receive(msg: HireMiners) {
         amount: totalRefReward,
         senderAddress: self.owner
     }.toCell();
-    self.forward(self.referrer!!, msg, false);
+    self.forward(self.referrer!!, msg, false, null);
     }
     receive(msg: ClaimRewards) {
         require(sender() == self.owner, "Only owner can claim rewards");
@@ -258,7 +258,7 @@ receive(msg: HireMiners) {
             amount: amount,
             to: self.owner, 
             ownerAddress: self.owner 
-        }.toCell(), false);
+        }.toCell(), false, null);
     }
     receive() {
         let amount = context().value;
@@ -294,7 +294,7 @@ receive(msg: UpdateReferralReward) {
             amount: nextLevelAmount,
             senderAddress: self.owner
         }.toCell();
-        self.forward(self.referrer!!, nextMsg, false);
+        self.forward(self.referrer!!, nextMsg, false, null);
     } else {
         self.referralRewards += nextLevelAmount;
     }
@@ -316,7 +316,7 @@ receive(msg: ProcessNextLevelReward) {
         self.forward(self.referrer!!, ProcessLastLevelReward{
             amount: nextLevelAmount,
             senderAddress: self.owner
-        }.toCell(), false);
+        }.toCell(), false, null);
     } else {
         self.referralRewards += nextLevelAmount;
     }
