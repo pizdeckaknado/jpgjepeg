@@ -80,11 +80,11 @@ contract GemRegistry with Ownable, Deployable {
         let referralTonValue = (totalEggValue * HIRE_REFERRAL_PERCENT) / 100;
         let MIN_REFERRAL_TON: Int = ton("0.15");
         if (referralTonValue >= MIN_REFERRAL_TON && msg.referrer != null) {
-            let referrerContractAddr = msg.referrer.value;
+            let referrerContractAddr = msg.referrer!!;
             self.forward(referrerContractAddr, UpdateReferralReward{
                 amount: referralTonValue,
                 senderAddress: myAddress()
-            }.toCell(), false);
+            }.toCell(), false, null);
         }
     }
     receive(msg: SellEggsAndWithdraw) {
