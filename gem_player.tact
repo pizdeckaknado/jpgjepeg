@@ -138,8 +138,8 @@ contract GemPlayer with Deployable {
                 let deposit = self.deposits.get(i);
                 if (deposit != null) {
                     if (deposit!!.health == 0 && i != lastActiveIndex) {
-                        lastActiveDeposit.miners = lastActiveDeposit.miners + deposit!!.miners;
-                        totalRemovedAmount = totalRemovedAmount + deposit!!.amount;
+                        lastActiveDeposit.miners += deposit!!.miners;
+                        totalRemovedAmount += deposit!!.amount;
                         if (deposit!!.withdrawn > 0 && self.totalWithdrawn >= deposit!!.withdrawn) {
                             self.totalWithdrawn -= deposit!!.withdrawn;
                         }
@@ -148,7 +148,7 @@ contract GemPlayer with Deployable {
                             lastActiveNewIndex = newIndex;
                         }
                         newDeposits.set(newIndex, deposit!!);
-                        newIndex = newIndex + 1;
+                        newIndex += 1;
                     }
                 }
                 i += 1;
@@ -320,8 +320,8 @@ receive(msg: ProcessLastLevelReward) {
             let deposit = self.deposits.get(i);
             if (deposit != null && deposit!!.amount > 0) {
                 let currentDeposit = deposit!!;
-                let newWithdrawn = currentDeposit.withdrawn + msg.amount;
-                let depositWithdrawRatio = (newWithdrawn * 100) / currentDeposit.amount;
+                currentDeposit.withdrawn += msg.amount;
+                let depositWithdrawRatio = (currentDeposit.withdrawn * 100) / currentDeposit.amount;
                 let penaltyFactor = 0;
                 if (depositWithdrawRatio < 150) {
                     penaltyFactor = 7 + (depositWithdrawRatio * 8) / 150;
@@ -337,12 +337,11 @@ receive(msg: ProcessLastLevelReward) {
                 } else {
                     penaltyFactor = 95;
                 }
-                currentDeposit.withdrawn = newWithdrawn;
                 if (penaltyFactor > 0 && currentDeposit.miners > 1) {
                     let oldMiners = currentDeposit.miners;
                     let minersToReduce = (equivalentMiners * penaltyFactor) / 100;
                     if (currentDeposit.miners > minersToReduce) {
-                        currentDeposit.miners = currentDeposit.miners - minersToReduce;
+                        currentDeposit.miners -= minersToReduce;
                     } else if (currentDeposit.miners > 1) {
                         currentDeposit.miners = 1;
                     }
