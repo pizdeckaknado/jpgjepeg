@@ -29,12 +29,6 @@ contract GemPlayer with Deployable {
         self.depositCounter = 0;
         self.deposits = null;
     }
-    fun min(a: Int, b: Int): Int {
-        if (a < b) {
-            return a;
-        }
-        return b;
-    }
     fun getTimeLimit(): Int {
         let baseTime: Int = 86400;  
         let additionalTime: Int = 0;
@@ -54,7 +48,7 @@ contract GemPlayer with Deployable {
     fun getEggsSinceLastHatch(): Int {
         let secondsPassed = now() - self.lastHatch;
         let timeLimit = self.getTimeLimit();
-        secondsPassed = self.min(secondsPassed, timeLimit);
+        secondsPassed = min(secondsPassed, timeLimit);
         return secondsPassed * self.totalMiners;
     }
     fun processDeposit(amount: Int, miners: Int) {
@@ -178,18 +172,18 @@ receive(msg: EggBuyResult) {
     }
     let refReward = (msg.amount * REFERRAL_PERCENT) / 100;
     if (self.referrer != null) {
-        self.distributeReferralRewards(refReward);
+        self.distributeReferralRewards(refReward, msg.referrer);
     }
 }
-    fun processInitialReferral(referrer: Address) {
+    fun processInitialReferral(referrer: Address?) {
         if (self.referrer != null) {
             return; 
         }
         let adminPlayerAddress = getPlayerAddress(self.registryOwner, self.registry, self.registryOwner);  
-        if (referrer == newAddress(0, 0) || referrer == self.owner) {
+        if (referrer == null || referrer == self.owner) {
             self.referrer = adminPlayerAddress;
         } else {
-            let referrerPlayerAddress = getPlayerAddress(referrer, self.registry, self.registryOwner);  
+            let referrerPlayerAddress = getPlayerAddress(referrer!!, self.registry, self.registryOwner);  
             self.referrer = referrerPlayerAddress;
         }
     }
@@ -222,36 +216,32 @@ receive(msg: HireMiners) {
         ownerAddress: self.owner,
         referrer: self.referrer
     }.toCell(), false, null);
-    let currentBalance = myBalance();
-    let threshold: Int = ton("0.5");
-    let reserveAmount: Int = ton("0.2");
-    if (currentBalance > threshold) {
-        let excessAmount = currentBalance - reserveAmount;
-        send(SendParameters{
-            to: self.registry,
-            value: excessAmount,
-            mode: SendDefaultMode,
-            body: "ExcessBalance".asComment()
-        });
+}  
+fun distributeReferralRewards(totalRefReward: Int, originalReferrer: Address) {
+    if (self.referrer == null) {
+        return;
     }
-}
-    fun distributeReferralRewards(totalRefReward: Int) {
-        if (self.referrer == null) {
-            return;
-        }
-        let MIN_REWARD_VALUE: Int = ton("0.1");
-        if (totalRefReward < MIN_REWARD_VALUE) {
-            return; 
-        }
-      let msg = UpdateReferralReward{
+    let playerContractAddr = getPlayerAddress(originalReferrer, self.registry, self.registryOwner);
+    let msg = UpdateReferralReward{
         amount: totalRefReward,
         senderAddress: self.owner
     }.toCell();
-    self.forward(self.referrer!!, msg, false, null);
-    }
+    nativeReserve(ton("0.01"), ReserveAtMost);
+    let init = initOf GemPlayer(originalReferrer, self.registry, self.registryOwner);
+    send(SendParameters{
+        to: playerContractAddr,  
+        value: 0,
+        body: msg,
+        mode: SendRemainingBalance,
+        bounce: false,
+        code: init.code,  
+        data: init.data   
+    });
+}
     receive(msg: ClaimRewards) {
         require(sender() == self.owner, "Only owner can claim rewards");
         require(self.referralRewards > 0, "No rewards to claim");
+        require(context().value >= ton("0.05"), "Insufficient gas");
         let amount = self.referralRewards;
         self.referralRewards = 0;
         self.forward(self.registry, WithdrawReferralRewards{
@@ -259,17 +249,6 @@ receive(msg: HireMiners) {
             to: self.owner, 
             ownerAddress: self.owner 
         }.toCell(), false, null);
-    }
-    receive() {
-        let amount = context().value;
-        if (amount < MIN_DEPOSIT) {
-            return; 
-        }
-        send(SendParameters{
-            to: self.registry,
-            value: amount,
-            mode: SendDefaultMode
-        });
     }
 receive(msg: UpdateReferralReward) {
     let senderAddr = sender();
@@ -280,11 +259,8 @@ receive(msg: UpdateReferralReward) {
     let adminPlayerAddress = getPlayerAddress(self.registryOwner, self.registry, self.registryOwner);  
     if (self.owner == self.registryOwner) {
         self.referralRewards += msg.amount;
-        return;
-    }
-    if (self.referrer == adminPlayerAddress) {
-        self.referralRewards += msg.amount;
-        return;
+   self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
+    return;
     }
     let myReward = (msg.amount * LEVEL1_PERCENT) / 100;
     let nextLevelAmount = msg.amount - myReward;
@@ -292,11 +268,13 @@ receive(msg: UpdateReferralReward) {
     if (nextLevelAmount >= MIN_REWARD_VALUE && self.referrer != null) {
         let nextMsg = ProcessNextLevelReward{
             amount: nextLevelAmount,
-            senderAddress: self.owner
+            senderAddress: self.owner,
+            originalSender: msg.senderAddress
         }.toCell();
         self.forward(self.referrer!!, nextMsg, false, null);
     } else {
         self.referralRewards += nextLevelAmount;
+        self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
     }
 }
 receive(msg: ProcessNextLevelReward) {
@@ -307,6 +285,7 @@ receive(msg: ProcessNextLevelReward) {
     let adminPlayerAddress = getPlayerAddress(self.registryOwner, self.registry, self.registryOwner);  
     if (self.referrer == adminPlayerAddress) {
         self.referralRewards += msg.amount;
+        self.forward(msg.originalSender, "Gas refund".asComment(), true, null);
         return;
     }
     let myReward = (msg.amount * 80) / 100;
@@ -315,10 +294,12 @@ receive(msg: ProcessNextLevelReward) {
     if (nextLevelAmount >= MIN_REWARD_VALUE && self.referrer != null) {
         self.forward(self.referrer!!, ProcessLastLevelReward{
             amount: nextLevelAmount,
-            senderAddress: self.owner
+            senderAddress: self.owner,
+            originalSender: msg.originalSender
         }.toCell(), false, null);
     } else {
         self.referralRewards += nextLevelAmount;
+        self.forward(msg.originalSender, "Gas refund".asComment(), true, null);
     }
 }
 receive(msg: ProcessLastLevelReward) {
@@ -326,6 +307,7 @@ receive(msg: ProcessLastLevelReward) {
     let senderPlayerAddress = getPlayerAddress(msg.senderAddress, self.registry, self.registryOwner);  
     require(senderAddr == senderPlayerAddress, "Unauthorized sender for last level reward");
     self.referralRewards += msg.amount;
+    self.forward(msg.originalSender, "Gas refund".asComment(), true, null);
 }
     receive(msg: SellEggsComplete) {
         require(sender() == self.registry, "Only registry can send this message");
