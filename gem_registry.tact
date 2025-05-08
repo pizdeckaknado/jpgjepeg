@@ -23,12 +23,6 @@ contract GemRegistry with Ownable, Deployable {
     fun availableBalance(): Int {
         return max(myBalance() - self.devFeeBalance - self.referralBalance, 0);
     }
-    fun max(a: Int, b: Int): Int {
-        if (a > b) {
-            return a;
-        }
-        return b;
-    }
     fun calculateEggBuy(eth: Int): Int {
         let availableBal = self.availableBalance();
         if (availableBal <= 0) {
@@ -46,9 +40,8 @@ contract GemRegistry with Ownable, Deployable {
         let gasamount = value - investAmount;
         require(gasamount >= ton("0.1"), "Insufficient gas");
         let devFee = (investAmount * FEE_PERCENT) / 100;
-        let refReward = (investAmount * REFERRAL_PERCENT) / 100;
         let investValue = investAmount - devFee;
-        
+        let refReward = (investValue * REFERRAL_PERCENT) / 100;
         require(investValue > 0, "Investment too small after fees");
         self.devFeeBalance += devFee;
         self.referralBalance += refReward;
@@ -56,7 +49,7 @@ contract GemRegistry with Ownable, Deployable {
         let playerAddress = contractAddress(init);
         let validReferrer = referrer;
         if (validReferrer == targetAddress) {
-            validReferrer = newAddress(0, 0);
+            validReferrer = null; 
         }
         let eggs = self.calculateEggBuy(investValue);
         send(SendParameters{
@@ -80,13 +73,16 @@ contract GemRegistry with Ownable, Deployable {
         let totalEggValue = self.calculateEggSell(totalEggsSpent);
         self.marketEggs += msg.eggAmount;
         let referralTonValue = (totalEggValue * HIRE_REFERRAL_PERCENT) / 100;
-        let MIN_REFERRAL_TON: Int = ton("0.15");
+        let MIN_REFERRAL_TON: Int = ton("0.1");
         if (referralTonValue >= MIN_REFERRAL_TON && msg.referrer != null) {
             let referrerContractAddr = msg.referrer!!;
+            self.referralBalance += referralTonValue;
             self.forward(referrerContractAddr, UpdateReferralReward{
                 amount: referralTonValue,
                 senderAddress: myAddress()
             }.toCell(), false, null);
+        } else {
+            self.forward(msg.ownerAddress, "Gas refund".asComment(), true, null);
         }
     }
     receive(msg: SellEggsAndWithdraw) {
@@ -126,7 +122,7 @@ contract GemRegistry with Ownable, Deployable {
         send(SendParameters{
             to: self.owner,
             value: amount,
-            mode: SendDefaultMode,
+            mode: SendRemainingValue,
             body: "DevFee".asComment() 
         });
     }
@@ -137,15 +133,9 @@ contract GemRegistry with Ownable, Deployable {
         send(SendParameters{
             to: msg.to,
             value: msg.amount,
-            mode: SendDefaultMode,
+            mode: SendRemainingValue,
             body: "Ref Reward".asComment() 
         });
-    }
-    get fun getEggBuyAmount(amount: Int): Int {
-        return self.calculateEggBuy(amount);
-    }
-    get fun getEggSellAmount(eggs: Int): Int {
-        return self.calculateEggSell(eggs);
     }
     get fun getPlayerAddress(owner: Address): Address {
         return getPlayerAddress(owner, myAddress(), self.owner);
@@ -156,7 +146,6 @@ contract GemRegistry with Ownable, Deployable {
             balance: self.availableBalance(),
             devFeeBalance: self.devFeeBalance,
             referralBalance: self.referralBalance,
-            eggsBuyPrice: self.calculateEggBuy(ONE_TON),
             owner: self.owner
         };
     }
