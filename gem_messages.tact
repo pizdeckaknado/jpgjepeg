@@ -1,7 +1,7 @@
 const ONE_TON: Int = ton("1");  
 const MIN_INVEST: Int = ton("0.1");  
 const MIN_DEPOSIT: Int = ton("0.1");  
-const MIN_ACTION_INTERVAL: Int = 0; 
+const MIN_ACTION_INTERVAL: Int = 10800; 
 const INIT_MARKET_EGGS: Int = 108_000_000_000;  
 const LEVEL1_PERCENT: Int = 75;        
 const LEVEL2_PERCENT: Int = 20;        
@@ -37,7 +37,7 @@ struct UpdatePlayer {
     depositCounter: Int;
 }
 message(0x7361d09c) BuyMiners {
-    referrer: Address;  
+    referrer: Address?;  
     investAmount: Int;
 }
 struct RegistryInfo {
@@ -45,12 +45,11 @@ struct RegistryInfo {
     balance: Int;        
     devFeeBalance: Int;  
     referralBalance: Int; 
-    eggsBuyPrice: Int;
     owner: Address;
 }
 message(0x7361d09d) BuyMinersFor {
     targetAddress: Address;    
-    referrer: Address;         
+    referrer: Address?;         
     investAmount: Int;
 }
 message(0x7362d09c) SellGems {
@@ -69,19 +68,21 @@ message(0x7366d09c) WithdrawReferralRewards {
 message EggBuyResult {
     amount: Int;       
     eggs: Int;         
-    referrer: Address; 
+    referrer: Address?; 
 }
 message UpdateReferralReward {
     amount: Int;      
     senderAddress: Address;  
 }
 message ProcessNextLevelReward {
-    amount: Int;      
-    senderAddress: Address;  
+    amount: Int;
+    senderAddress: Address; 
+    originalSender: Address;
 }
 message ProcessLastLevelReward {
     amount: Int;
     senderAddress: Address;
+    originalSender: Address;
 }
 message UpdateMarketEggs {
     eggAmount: Int;
