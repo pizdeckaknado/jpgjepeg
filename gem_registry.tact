@@ -33,7 +33,7 @@ contract GemRegistry with Ownable, Deployable {
     fun calculateEggSell(eggs: Int): Int {
         return calculateTrade(eggs, self.marketEggs, self.availableBalance());
     }
-    fun processBuyMiners(targetAddress: Address, referrer: Address, value: Int, investAmount: Int): Address {
+    fun processBuyMiners(targetAddress: Address, referrer: Address?, value: Int, investAmount: Int): Address {
         require(value >= MIN_INVEST, "Minimum investment not met");
         require(investAmount <= value, "Investment amount exceeds sent value");
         require(investAmount >= MIN_INVEST, "Investment amount too small");
@@ -74,13 +74,13 @@ contract GemRegistry with Ownable, Deployable {
         self.marketEggs += msg.eggAmount;
         let referralTonValue = (totalEggValue * HIRE_REFERRAL_PERCENT) / 100;
         let MIN_REFERRAL_TON: Int = ton("0.1");
-        if (referralTonValue >= MIN_REFERRAL_TON && msg.referrer != null) {
-            let referrerContractAddr = msg.referrer!!;
+        if (referralTonValue >= MIN_REFERRAL_TON) {
+            let referrerPlayerAddress = getPlayerAddress(msg.referrer!!, myAddress(), self.owner);
             self.referralBalance += referralTonValue;
-            self.forward(referrerContractAddr, UpdateReferralReward{
+            self.forward(referrerPlayerAddress, UpdateReferralReward{
                 amount: referralTonValue,
                 senderAddress: myAddress()
-            }.toCell(), false, null);
+            }.toCell(), false, null); 
         } else {
             self.forward(msg.ownerAddress, "Gas refund".asComment(), true, null);
         }
