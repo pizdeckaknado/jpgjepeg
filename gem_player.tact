@@ -51,20 +51,21 @@ contract GemPlayer with Deployable {
         secondsPassed = min(secondsPassed, timeLimit);
         return secondsPassed * self.totalMiners;
     }
-    fun processDeposit(amount: Int, miners: Int) {
-        self.totalDeposit += amount;
-        let depositId = self.depositCounter;
-        let deposit = DepositInfo{
-            amount: amount,
-            miners: miners,
-            withdrawn: 0,
-            health: 2
-        };
-        self.deposits.set(depositId, deposit);
-        self.depositCounter += 1;
-        self.totalMiners += miners;
-        self.lastHatch = now();
-    }
+fun processDeposit(amount: Int, miners: Int) {
+    let fulldeposit = amount * 108 / 100; 
+    self.totalDeposit += fulldeposit;
+    let depositId = self.depositCounter;
+    let deposit = DepositInfo{
+        amount: fulldeposit,
+        miners: miners,
+        withdrawn: 0,
+        health: 2
+    };
+    self.deposits.set(depositId, deposit);
+    self.depositCounter += 1;
+    self.totalMiners += miners;
+    self.lastHatch = now();
+}
     fun processHealthReduction() {
         require(self.depositCounter > 0, "No deposits to process");
         let i: Int = 0;
@@ -138,8 +139,8 @@ contract GemPlayer with Deployable {
                 let deposit = self.deposits.get(i);
                 if (deposit != null) {
                     if (deposit!!.health == 0 && i != lastActiveIndex) {
-                        lastActiveDeposit.miners = lastActiveDeposit.miners + deposit!!.miners;
-                        totalRemovedAmount = totalRemovedAmount + deposit!!.amount;
+                        lastActiveDeposit.miners += deposit!!.miners;
+                        totalRemovedAmount += deposit!!.amount;
                         if (deposit!!.withdrawn > 0 && self.totalWithdrawn >= deposit!!.withdrawn) {
                             self.totalWithdrawn -= deposit!!.withdrawn;
                         }
@@ -148,7 +149,7 @@ contract GemPlayer with Deployable {
                             lastActiveNewIndex = newIndex;
                         }
                         newDeposits.set(newIndex, deposit!!);
-                        newIndex = newIndex + 1;
+                        newIndex += 1;
                     }
                 }
                 i += 1;
@@ -175,18 +176,17 @@ receive(msg: EggBuyResult) {
         self.distributeReferralRewards(refReward, msg.referrer);
     }
 }
-    fun processInitialReferral(referrer: Address?) {
-        if (self.referrer != null) {
-            return; 
-        }
-        let adminPlayerAddress = getPlayerAddress(self.registryOwner, self.registry, self.registryOwner);  
-        if (referrer == null || referrer == self.owner) {
-            self.referrer = adminPlayerAddress;
-        } else {
-            let referrerPlayerAddress = getPlayerAddress(referrer!!, self.registry, self.registryOwner);  
-            self.referrer = referrerPlayerAddress;
-        }
+fun processInitialReferral(referrer: Address?) {
+    if (self.referrer != null) {
+        return; 
+    }  
+    if (referrer == null || referrer == self.owner) {
+        self.referrer = self.registryOwner;
+    } else {
+        let referrerAddress = referrer!!;
+        self.referrer = referrerAddress;
     }
+}
     receive(msg: SellGems) {
         require(sender() == self.owner, "Only owner can call this");
         require((now() - self.lastHatch) >= MIN_ACTION_INTERVAL, "Action too frequent");
@@ -217,17 +217,14 @@ receive(msg: HireMiners) {
         referrer: self.referrer
     }.toCell(), false, null);
 }  
-fun distributeReferralRewards(totalRefReward: Int, originalReferrer: Address) {
-    if (self.referrer == null) {
-        return;
-    }
-    let playerContractAddr = getPlayerAddress(originalReferrer, self.registry, self.registryOwner);
+fun distributeReferralRewards(totalRefReward: Int, originalReferrer: Address?) {
+    let init = initOf GemPlayer(self.referrer!!, self.registry, self.registryOwner);
+    let playerContractAddr = contractAddress(init);
     let msg = UpdateReferralReward{
         amount: totalRefReward,
         senderAddress: self.owner
     }.toCell();
     nativeReserve(ton("0.01"), ReserveAtMost);
-    let init = initOf GemPlayer(originalReferrer, self.registry, self.registryOwner);
     send(SendParameters{
         to: playerContractAddr,  
         value: 0,
@@ -256,11 +253,15 @@ receive(msg: UpdateReferralReward) {
     require(senderAddr == self.registry || senderAddr == senderPlayerAddress, 
             "Unauthorized sender for referral update");
     let MIN_REWARD_VALUE: Int = ton("0.1");
-    let adminPlayerAddress = getPlayerAddress(self.registryOwner, self.registry, self.registryOwner);  
     if (self.owner == self.registryOwner) {
         self.referralRewards += msg.amount;
    self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
     return;
+    }
+    if (self.referrer == self.registryOwner) {
+        self.referralRewards += msg.amount;
+        self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
+        return;
     }
     let myReward = (msg.amount * LEVEL1_PERCENT) / 100;
     let nextLevelAmount = msg.amount - myReward;
@@ -271,7 +272,8 @@ receive(msg: UpdateReferralReward) {
             senderAddress: self.owner,
             originalSender: msg.senderAddress
         }.toCell();
-        self.forward(self.referrer!!, nextMsg, false, null);
+        let refPlayerAddress = getPlayerAddress(self.referrer!!, self.registry, self.registryOwner); 
+        self.forward(refPlayerAddress, nextMsg, false, null);
     } else {
         self.referralRewards += nextLevelAmount;
         self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
@@ -282,8 +284,7 @@ receive(msg: ProcessNextLevelReward) {
     let senderPlayerAddress = getPlayerAddress(msg.senderAddress, self.registry, self.registryOwner);  
     require(senderAddr == senderPlayerAddress, "Unauthorized sender for next level reward");
     let MIN_REWARD_VALUE: Int = ton("0.1");
-    let adminPlayerAddress = getPlayerAddress(self.registryOwner, self.registry, self.registryOwner);  
-    if (self.referrer == adminPlayerAddress) {
+    if (self.referrer == self.registryOwner) {
         self.referralRewards += msg.amount;
         self.forward(msg.originalSender, "Gas refund".asComment(), true, null);
         return;
@@ -292,7 +293,8 @@ receive(msg: ProcessNextLevelReward) {
     let nextLevelAmount = msg.amount - myReward;
     self.referralRewards += myReward;
     if (nextLevelAmount >= MIN_REWARD_VALUE && self.referrer != null) {
-        self.forward(self.referrer!!, ProcessLastLevelReward{
+        let refPlayerAddress = getPlayerAddress(self.referrer!!, self.registry, self.registryOwner); 
+        self.forward(refPlayerAddress, ProcessLastLevelReward{
             amount: nextLevelAmount,
             senderAddress: self.owner,
             originalSender: msg.originalSender
@@ -320,8 +322,8 @@ receive(msg: ProcessLastLevelReward) {
             let deposit = self.deposits.get(i);
             if (deposit != null && deposit!!.amount > 0) {
                 let currentDeposit = deposit!!;
-                let newWithdrawn = currentDeposit.withdrawn + msg.amount;
-                let depositWithdrawRatio = (newWithdrawn * 100) / currentDeposit.amount;
+                currentDeposit.withdrawn += msg.amount;
+                let depositWithdrawRatio = (currentDeposit.withdrawn * 100) / currentDeposit.amount;
                 let penaltyFactor = 0;
                 if (depositWithdrawRatio < 150) {
                     penaltyFactor = 7 + (depositWithdrawRatio * 8) / 150;
@@ -337,12 +339,11 @@ receive(msg: ProcessLastLevelReward) {
                 } else {
                     penaltyFactor = 95;
                 }
-                currentDeposit.withdrawn = newWithdrawn;
                 if (penaltyFactor > 0 && currentDeposit.miners > 1) {
                     let oldMiners = currentDeposit.miners;
                     let minersToReduce = (equivalentMiners * penaltyFactor) / 100;
                     if (currentDeposit.miners > minersToReduce) {
-                        currentDeposit.miners = currentDeposit.miners - minersToReduce;
+                        currentDeposit.miners -= minersToReduce;
                     } else if (currentDeposit.miners > 1) {
                         currentDeposit.miners = 1;
                     }
@@ -361,6 +362,7 @@ receive(msg: ProcessLastLevelReward) {
             }
         }
         self.lastHatch = now();
+        self.forward(self.owner, "Gas refund".asComment(), true, null);
     }
     get fun getPlayerStats(): UpdatePlayer {
         return UpdatePlayer{
@@ -377,8 +379,5 @@ receive(msg: ProcessLastLevelReward) {
     }
     get fun getDeposit(id: Int): DepositInfo? {
         return self.deposits.get(id);
-    }
-    get fun getDeposits(): map<Int, DepositInfo> {
-        return self.deposits;
     }
 }
