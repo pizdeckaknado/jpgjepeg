@@ -52,11 +52,10 @@ contract GemPlayer with Deployable {
         return secondsPassed * self.totalMiners;
     }
 fun processDeposit(amount: Int, miners: Int) {
-    let fulldeposit = amount * 108 / 100; 
-    self.totalDeposit += fulldeposit;
+    self.totalDeposit += amount;
     let depositId = self.depositCounter;
     let deposit = DepositInfo{
-        amount: fulldeposit,
+        amount: amount,
         miners: miners,
         withdrawn: 0,
         health: 2
