@@ -172,7 +172,7 @@ receive(msg: EggBuyResult) {
     }
     let refReward = (msg.amount * REFERRAL_PERCENT) / 100;
     if (self.referrer != null) {
-        self.distributeReferralRewards(refReward, msg.referrer);
+        self.distributeReferralRewards(refReward);
     }
 }
 fun processInitialReferral(referrer: Address?) {
@@ -216,7 +216,7 @@ receive(msg: HireMiners) {
         referrer: self.referrer
     }.toCell(), false, null);
 }  
-fun distributeReferralRewards(totalRefReward: Int, originalReferrer: Address?) {
+fun distributeReferralRewards(totalRefReward: Int) {
     let init = initOf GemPlayer(self.referrer!!, self.registry, self.registryOwner);
     let playerContractAddr = contractAddress(init);
     let msg = UpdateReferralReward{
