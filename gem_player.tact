@@ -257,11 +257,6 @@ receive(msg: UpdateReferralReward) {
    self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
     return;
     }
-    if (self.referrer == self.registryOwner) {
-        self.referralRewards += msg.amount;
-        self.forward(msg.senderAddress, "Gas refund".asComment(), true, null);
-        return;
-    }
     let myReward = (msg.amount * LEVEL1_PERCENT) / 100;
     let nextLevelAmount = msg.amount - myReward;
     self.referralRewards += myReward;
